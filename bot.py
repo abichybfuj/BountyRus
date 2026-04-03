@@ -1,147 +1,98 @@
 import telebot
-from telebot import types
-import json
-import os
-import datetime
 import feedparser
-import random
-import threading
 import time
+import threading
+from datetime import datetime, timedelta
 
-# ===== التوكن من Render =====
-TOKEN = os.getenv("8686210830:AAGZmXopHLTELnyszWr7wsyhouPmr74vVjk")
+# --- الإعدادات ---
+TOKEN = '8686210830:AAGZmXopHLTELnyszWr7wsyhouPmr74vVjk' # ضع التوكن الخاص بك هنا
+YOUTUBE_RSS_URL = 'https://youtube.com' # معرف قناة Bandai Namco
+
 bot = telebot.TeleBot(TOKEN)
 
-# ===== ملفات =====
-USERS_FILE = "users.json"
-LAST_VIDEO_FILE = "last_video.json"
+# قاعدة بيانات بسيطة
+users_data = {} # {user_id: {'points': 0, 'last_gift': None}}
+subscribers = set() # قائمة اليوزرات لإرسال الإشعارات لهم
+last_video_link = None # لتجنب تكرار إرسال نفس الفيديو
 
-# ===== تحميل المستخدمين =====
-if os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "r") as f:
-        users = json.load(f)
-else:
-    users = {}
+def get_user(user_id):
+    if user_id not in users_data:
+        users_data[user_id] = {'points': 0, 'last_gift': None}
+    return users_data[user_id]
 
-# ===== تحميل آخر فيديو =====
-if os.path.exists(LAST_VIDEO_FILE):
-    with open(LAST_VIDEO_FILE, "r") as f:
-        last_video = json.load(f)
-else:
-    last_video = {"id": ""}
-
-# ===== العروض =====
-OFFERS = ["حساب باونتي #1","حساب باونتي #2","حساب باونتي #3"]
-
-# ===== RSS =====
-YOUTUBE_RSS = "https://www.youtube.com/feeds/videos.xml?channel_id=UCqly9F4Fr_jf2Y1Cy5hacRg"
-
-# ===== حفظ =====
-def save_users():
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=4)
-
-def save_last_video():
-    with open(LAST_VIDEO_FILE, "w") as f:
-        json.dump(last_video, f, indent=4)
-
-# ===== الأزرار =====
-def main_keyboard():
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.row("🎁 الهدية اليومية", "🛒 العروض")
-    kb.row("📰 الأخبار", "👥 عدد المشتركين")
-    kb.row("💎 نقاطي")
-    return kb
-
-# ===== فلترة فيديوهات =====
-def check_new_video():
-    global last_video
-    feed = feedparser.parse(YOUTUBE_RSS)
-
-    if feed.entries:
-        latest = feed.entries[0]
-        video_id = latest.id
-        title = latest.title.lower()
-
-        keywords = ["bounty rush", "opbr", "one piece bounty"]
-
-        if video_id != last_video["id"] and any(k in title for k in keywords):
-            last_video["id"] = video_id
-            save_last_video()
-
-            for chat_id in users.keys():
-                try:
-                    bot.send_message(chat_id, f"🔥 فيديو جديد!\n\n🎬 {latest.title}\n{latest.link}")
-                except:
-                    pass
-
-# ===== لوب التحقق =====
-def loop():
+# --- وظيفة فحص اليوتيوب التلقائي ---
+def check_youtube():
+    global last_video_link
     while True:
         try:
-            check_new_video()
-        except:
-            pass
-        time.sleep(300)
+            feed = feedparser.parse(YOUTUBE_RSS_URL)
+            if feed.entries:
+                latest_video = feed.entries[0]
+                video_link = latest_video.link
+                video_title = latest_video.title
 
-threading.Thread(target=loop, daemon=True).start()
+                # إذا كان الفيديو جديداً وغير مرسل سابقاً
+                if last_video_link != video_link:
+                    last_video_link = video_link
+                    message_text = f"🚨 **فيديو جديد من باونتي راش!**\n\n🎬 العنوان: {video_title}\n🔗 الرابط: {video_link}"
+                    
+                    # إرسال لكل المشتركين
+                    for user_id in list(subscribers):
+                        try:
+                            bot.send_message(user_id, message_text, parse_mode="Markdown")
+                        except:
+                            pass # في حال قام المستخدم بحظر البوت
+            
+        except Exception as e:
+            print(f"Error checking YouTube: {e}")
+            
+        time.sleep(300) # الانتظار 5 دقائق (300 ثانية)
 
-# ===== الرسائل =====
-@bot.message_handler(func=lambda m: True)
-def handle_message(message):
-    chat_id = str(message.chat.id)
-    text = message.text
+# تشغيل الفحص في خلفية البرنامج (Thread) لكي لا يتوقف البوت
+threading.Thread(target=check_youtube, daemon=True).start()
 
-    # تسجيل مستخدم
-    if chat_id not in users:
-        users[chat_id] = {"points":0,"last_daily":""}
-        save_users()
-        bot.send_message(chat_id, "🔥 أهلاً بك!", reply_markup=main_keyboard())
+# --- الأوامر الرئيسية ---
 
-    today = datetime.date.today().isoformat()
+@bot.message_handler(commands=['start'])
+def start(message):
+    user_id = message.from_user.id
+    get_user(user_id)
+    subscribers.add(user_id) # إضافة المستخدم لقائمة الإشعارات
+    
+    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add("🎁 هدية يومية", "💰 نقاطي", "🛒 متجر الحسابات", "📺 آخر فيديو")
+    bot.send_message(message.chat.id, "أهلاً بك! تم تفعيل إشعارات باونتي راش التلقائية (كل 5 دقائق) ✅", reply_markup=markup)
 
-    if text == "🎁 الهدية اليومية":
-        if users[chat_id]["last_daily"] != today:
-            users[chat_id]["points"] += 1
-            users[chat_id]["last_daily"] = today
-            save_users()
-            bot.send_message(chat_id, f"✅ أخذت نقطة! نقاطك: {users[chat_id]['points']}", reply_markup=main_keyboard())
-        else:
-            bot.send_message(chat_id, "⚠️ تعال بكرة!", reply_markup=main_keyboard())
-
-    elif text == "🛒 العروض":
-        if users[chat_id]["points"] >= 10:
-            offer = random.choice(OFFERS)
-            users[chat_id]["points"] -= 10
-            save_users()
-
-            bot.send_message(
-                chat_id,
-                f"🎉 اشتريت: {offer}\n💎 نقاطك الآن: {users[chat_id]['points']}",
-                reply_markup=main_keyboard()
-            )
-        else:
-            bot.send_message(chat_id, "❌ تحتاج 10 نقاط", reply_markup=main_keyboard())
-
-    elif text == "📰 الأخبار":
-        feed = feedparser.parse(YOUTUBE_RSS)
-        msgs = []
-        for e in feed.entries[:5]:
-            if any(k in e.title.lower() for k in ["bounty rush", "opbr"]):
-                msgs.append(f"🎬 {e.title}\n{e.link}")
-        if msgs:
-            bot.send_message(chat_id, "\n\n".join(msgs), reply_markup=main_keyboard())
-        else:
-            bot.send_message(chat_id, "❌ ما فيه أخبار حالياً", reply_markup=main_keyboard())
-
-    elif text == "👥 عدد المشتركين":
-        bot.send_message(chat_id, f"👥 العدد: {len(users)}", reply_markup=main_keyboard())
-
-    elif text == "💎 نقاطي":
-        bot.send_message(chat_id, f"💎 نقاطك: {users[chat_id]['points']}", reply_markup=main_keyboard())
-
+@bot.message_handler(func=lambda m: m.text == "🎁 هدية يومية")
+def daily_gift(message):
+    user = get_user(message.from_user.id)
+    now = datetime.now()
+    if user['last_gift'] and now - user['last_gift'] < timedelta(days=1):
+        bot.reply_to(message, "❌ استلمت هديتك اليوم، عد غداً!")
     else:
-        bot.send_message(chat_id, "⚠️ استخدم الأزرار فقط", reply_markup=main_keyboard())
+        user['points'] += 5
+        user['last_gift'] = now
+        bot.reply_to(message, f"✅ مبروك! حصلت على 5 نقاط. نقاطك الآن: {user['points']}")
 
-# ===== تشغيل البوت =====
+@bot.message_handler(func=lambda m: m.text == "💰 نقاطي")
+def my_points(message):
+    user = get_user(message.from_user.id)
+    bot.reply_to(message, f"📊 نقاطك الحالية: {user['points']}")
+
+@bot.message_handler(func=lambda m: m.text == "🛒 متجر الحسابات")
+def store(message):
+    user = get_user(message.from_user.id)
+    if user['points'] < 10:
+        bot.reply_to(message, "⚠️ تحتاج 10 نقاط لشراء حساب باونتي عشوائي!")
+    else:
+        user['points'] -= 10
+        bot.reply_to(message, "✅ تم الشراء! الحساب: random_acc_1@bounty.com | الباسورد: 998877")
+
+@bot.message_handler(func=lambda m: m.text == "📺 آخر فيديو")
+def manual_check(message):
+    feed = feedparser.parse(YOUTUBE_RSS_URL)
+    if feed.entries:
+        bot.reply_to(message, f"📺 آخر فيديو متوفر:\n{feed.entries[0].link}")
+
+print("البوت يعمل ويفحص اليوتيوب كل 5 دقائق... 🚀")
 bot.infinity_polling()
