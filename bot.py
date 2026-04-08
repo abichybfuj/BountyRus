@@ -2,7 +2,7 @@ import telebot
 import os
 
 # ضع التوكن الخاص بك هنا
-API_TOKEN = '8686210830:AAGZmXopHLTELnyszWr7wsyhouPmr74vVjk'
+API_TOKEN = '8686210830:AAG7FXgngesYgSFCElfuwAkNHNjk-Ckjd8k'
 # ضع الأيدي (ID) الخاص بحسابك الشخصي
 ADMIN_ID = 123456789 
 
