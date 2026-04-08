@@ -3,25 +3,25 @@ import os
 from flask import Flask
 from threading import Thread
 
-# --- إعداد خادم وهمي لإرضاء منصة Render ---
+# 1. جزء الـ Flask عشان يرضي سيرفر Render وما يعطيك كتابة برتقالية
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "البوت يعمل بنجاح!"
+    return "البوت شغال 100%"
 
 def run():
-    # Render يعطي المنفذ تلقائياً عبر متغير PORT
+    # Render يحتاج يشوف بورت مفتوح عشان ما يقفل البوت
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run)
     t.start()
-# ---------------------------------------
 
-API_TOKEN = '8686210830:AAG7FXgngesYgSFCElfuwAkNHNjk-Ckjd8k'  # تأكد من وضع التوكن الجديد هنا
-ADMIN_ID = 123456789 
+# 2. إعدادات البوت (تأكد من وضع التوكن الجديد)
+API_TOKEN = '8686210830:AAG7FXgngesYgSFCElfuwAkNHNjk-Ckjd8k' 
+ADMIN_ID = 123456789  # ضع الأيدي حقك هنا
 
 bot = telebot.TeleBot(API_TOKEN)
 GROUPS_FILE = "groups.txt"
@@ -48,17 +48,20 @@ def auto_register(message):
 def start_broadcast(message):
     groups = load_groups()
     if not groups:
-        bot.reply_to(message, "❌ لا توجد مجموعات.")
+        bot.reply_to(message, "❌ القائمة فارغة.")
         return
     bot.reply_to(message, f"⏳ جاري النشر في {len(groups)} مجموعة...")
+    sent = 0
     for group_id in groups:
         try:
             bot.copy_message(chat_id=group_id, from_chat_id=message.chat.id, message_id=message.message_id)
-        except: pass
-    bot.send_message(message.chat.id, "✅ اكتمل النشر!")
+            sent += 1
+        except: continue
+    bot.send_message(message.chat.id, f"✅ تم النشر في: {sent}")
 
+# 3. تشغيل البوت مع تنظيف الاتصالات القديمة
 if __name__ == "__main__":
-    print("🚀 جاري تشغيل الخادم الوهمي والبوت...")
-    keep_alive() # تشغيل الخادم في الخلفية
-    bot.remove_webhook()
-    bot.infinity_polling(skip_pending=True)
+    print("🚀 البوت يبدأ العمل...")
+    keep_alive() # يفتح البورت الوهمي
+    bot.remove_webhook() # ينهي أي تعارض قديم (Conflict 409)
+    bot.infinity_polling(skip_pending=True) # يمنع تعليق الرسائل القديمة
