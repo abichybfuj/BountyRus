@@ -1,122 +1,60 @@
 import telebot
-import feedparser
-import time
-import threading
 import os
-from flask import Flask
-from datetime import datetime, timedelta
 
-# --- إعداد خادم وهمي لإرضاء منصة Render ومنع اللون البرتقالي ---
-app = Flask(__name__)
+# ضع التوكن الخاص بك هنا
+API_TOKEN = '8686210830:AAGZmXopHLTELnyszWr7wsyhouPmr74vVjk'
+# ضع الأيدي (ID) الخاص بحسابك الشخصي لكي لا ينشر البوت رسائل الغرباء
+ADMIN_ID = 123456789  # يمكنك الحصول عليه من بوت @userinfobot
 
-@app.route('/')
-def index():
-    return "Bot is running..."
+bot = telebot.TeleBot(API_TOKEN)
+GROUPS_FILE = "groups.txt"
 
-def run_web_server():
-    # Render يمرر البوت تلقائياً عبر متغير البيئة PORT
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+# وظيفة لتحميل المجموعات من الملف
+def load_groups():
+    if not os.path.exists(GROUPS_FILE):
+        return set()
+    with open(GROUPS_FILE, "r") as f:
+        return set(line.strip() for line in f if line.strip())
 
-# تشغيل خادم الويب في خلفية البرنامج
-threading.Thread(target=run_web_server, daemon=True).start()
+# وظيفة لحفظ مجموعة جديدة في الملف
+def save_group(chat_id):
+    groups = load_groups()
+    if str(chat_id) not in groups:
+        with open(GROUPS_FILE, "a") as f:
+            f.write(f"{chat_id}\n")
+        return True
+    return False
 
-# --- إعدادات البوت ---
-TOKEN = '8686210830:AAGZmXopHLTELnyszWr7wsyhouPmr74vVjk' 
-YOUTUBE_RSS_URL = 'https://youtube.com' # رابط RSS لقناة بانداي نامكو
+# استقبال أي رسالة في المجموعات لتخزين "الآيدي" تلقائياً
+@bot.message_handler(content_types=['text', 'new_chat_members'])
+def auto_register(message):
+    if message.chat.type in ['group', 'supergroup']:
+        if save_group(message.chat.id):
+            print(f"✅ تم تسجيل مجموعة جديدة: {message.chat.title} ({message.chat.id})")
 
-bot = telebot.TeleBot(TOKEN)
+# محرك النشر: أي رسالة ترسلها أنت للبوت في "الخاص" سيتم نشرها للجميع
+@bot.message_handler(func=lambda message: message.from_user.id == ADMIN_ID and message.chat.type == 'private')
+def start_broadcast(message):
+    groups = load_groups()
+    if not groups:
+        bot.reply_to(message, "❌ لا توجد مجموعات مسجلة حالياً.")
+        return
 
-# حذف أي Webhook قديم عالق لمنع خطأ 409 Conflict
-bot.remove_webhook()
-
-# قاعدة بيانات بسيطة (ستضيع عند إعادة تشغيل السيرفر في النسخة المجانية)
-users_data = {} 
-subscribers = set() 
-last_video_link = None 
-
-def get_user(user_id):
-    if user_id not in users_data:
-        users_data[user_id] = {'points': 0, 'last_gift': None}
-    return users_data[user_id]
-
-# --- وظيفة فحص اليوتيوب التلقائي ---
-def check_youtube():
-    global last_video_link
-    while True:
-        try:
-            feed = feedparser.parse(YOUTUBE_RSS_URL)
-            if feed.entries:
-                latest_video = feed.entries[0]
-                video_link = latest_video.link
-                video_title = latest_video.title
-
-                if last_video_link != video_link:
-                    last_video_link = video_link
-                    message_text = f"🚨 **فيديو جديد من باونتي راش!**\n\n🎬 العنوان: {video_title}\n🔗 الرابط: {video_link}"
-                    
-                    for user_id in list(subscribers):
-                        try:
-                            bot.send_message(user_id, message_text, parse_mode="Markdown")
-                        except:
-                            pass 
-            
-        except Exception as e:
-            print(f"Error checking YouTube: {e}")
-            
-        time.sleep(300) # فحص كل 5 دقائق
-
-threading.Thread(target=check_youtube, daemon=True).start()
-
-# --- الأوامر الرئيسية ---
-
-@bot.message_handler(commands=['start'])
-def start(message):
-    user_id = message.from_user.id
-    get_user(user_id)
-    subscribers.add(user_id)
+    sent_count = 0
+    fail_count = 0
     
-    markup = telebot.types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    markup.add("🎁 هدية يومية", "💰 نقاطي", "🛒 متجر الحسابات", "📺 آخر فيديو")
-    bot.send_message(message.chat.id, "أهلاً بك! تم تفعيل إشعارات باونتي راش التلقائية ✅", reply_markup=markup)
+    bot.reply_to(message, f"⏳ جاري النشر في {len(groups)} مجموعة...")
 
-@bot.message_handler(func=lambda m: m.text == "🎁 هدية يومية")
-def daily_gift(message):
-    user = get_user(message.from_user.id)
-    now = datetime.now()
-    if user['last_gift'] and now - user['last_gift'] < timedelta(days=1):
-        bot.reply_to(message, "❌ استلمت هديتك اليوم، عد غداً!")
-    else:
-        user['points'] += 5
-        user['last_gift'] = now
-        bot.reply_to(message, f"✅ مبروك! حصلت على 5 نقاط. نقاطك الآن: {user['points']}")
+    for group_id in groups:
+        try:
+            # استخدام copy_message يرسل الرسالة وكأنها من البوت مباشرة (بدون كلمة Forwarded)
+            bot.copy_message(chat_id=group_id, from_chat_id=message.chat.id, message_id=message.message_id)
+            sent_count += 1
+        except Exception as e:
+            print(f"فشل الإرسال للمجموعة {group_id}: {e}")
+            fail_count += 1
 
-@bot.message_handler(func=lambda m: m.text == "💰 نقاطي")
-def my_points(message):
-    user = get_user(message.from_user.id)
-    bot.reply_to(message, f"📊 نقاطك الحالية: {user['points']}")
+    bot.send_message(message.chat.id, f"✅ اكتمل النشر!\nتم بنجاح: {sent_count}\nفشل: {fail_count}")
 
-@bot.message_handler(func=lambda m: m.text == "🛒 متجر الحسابات")
-def store(message):
-    user = get_user(message.from_user.id)
-    if user['points'] < 10:
-        bot.reply_to(message, "⚠️ تحتاج 10 نقاط لشراء حساب باونتي عشوائي!")
-    else:
-        user['points'] -= 10
-        bot.reply_to(message, "✅ تم الشراء! الحساب: random_acc_1@bounty.com | الباسورد: 998877")
-
-@bot.message_handler(func=lambda m: m.text == "📺 آخر فيديو")
-def manual_check(message):
-    try:
-        feed = feedparser.parse(YOUTUBE_RSS_URL)
-        if feed.entries:
-            bot.reply_to(message, f"📺 آخر فيديو متوفر:\n{feed.entries[0].link}")
-        else:
-            bot.reply_to(message, "لا توجد فيديوهات حالياً.")
-    except:
-        bot.reply_to(message, "حدث خطأ أثناء جلب الفيديو.")
-
-print("البوت يعمل بنظام الحماية والمنفذ الوهمي... 🚀")
-
-# التشغيل النهائي مع تجاهل الرسائل القديمة المعلقة
-bot.infinity_polling(skip_pending=True)
+print("البوت يعمل... أضف البوت للمجموعات وارسل له أي رسالة في الخاص لينشرها.")
+bot.polling(none_stop=True)
